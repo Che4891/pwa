@@ -72,12 +72,19 @@ header {
 }
 
 .app-bar {
-    padding: 10px 30px;
-    display: flex;
-    justify-content: space-between;
+  padding: 10px 30px;
+  display: flex;
+  justify-content: space-between;
 }
 
 .app-bar-logo {
   max-width: 40px;
   max-height: 40px;
+}
+
+.ofer {
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }

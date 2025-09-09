@@ -23,13 +23,16 @@
   <main>
     <div class="ofer">
       <h1>New PWA test site</h1>
+      <div id="inputContainer" class="user-name">
+        <input type="text" name="username" id="username" placeholder="i.e. foo@bar.com">
+        <div class="msg">This fild is required</div>
+      </div>
       <div>
-        <button id="register">Створити Passkey</button>
-        <button id="login">Увійти через Passkey</button>
-
-        <pre id="output"></pre>
+        <button id="register">Create Passkey</button>
+        <button id="login">Login with Passkey</button>
       </div>
     </div>
+    <p id="output"></p>
   </main>
   <script src="js/main.js"></script>
 </body>

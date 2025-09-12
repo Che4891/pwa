@@ -1,75 +1,75 @@
+// Отримуємо функції з глобальної змінної SimpleWebAuthnBrowser
+const { startRegistration, startAuthentication } = SimpleWebAuthnBrowser;
+
 const output = document.getElementById("output");
 const register = document.getElementById("register");
 const login = document.getElementById("login");
-const userName = document.getElementById("username");
+const usernameInput = document.getElementById("username");
 const inputContainer = document.getElementById("inputContainer");
 
 const log = (msg) => (output.textContent += msg + "\n");
 
 function validateInput() {
-  const value = userName.value.trim();
+  const value = usernameInput.value.trim();
   const isValid = value !== "";
-
   inputContainer.classList.toggle("alert", !isValid);
-
   return isValid ? value : null;
 }
 
-userName.addEventListener("blur", validateInput);
+usernameInput.addEventListener("blur", validateInput);
 
 register.addEventListener("click", async () => {
-  const text = validateInput();
-  if (!text) return;
+  const username = validateInput();
+  if (!username) return alert("Enter username");
 
   try {
-    const publicKey = {
-      challenge: new Uint8Array(32),
-      rp: { name: "Demo PWA" },
-      user: {
-        id: new Uint8Array([1, 2, 3, 4]),
-        name: text,
-        displayName: text,
-      },
-      pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-      authenticatorSelection: { userVerification: "preferred" },
-      timeout: 60000,
-      attestation: "direct",
-    };
+    const resp = await fetch("/generate-registration-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    const options = await resp.json();
 
-    console.log("publicKey", publicKey);
+    const attResp = await startRegistration(options);
 
-    const credential = await navigator.credentials.create({ publicKey });
-    alert("Passkey success");
-    log(JSON.stringify(credential, null, 2));
+    const verificationResp = await fetch("/verify-registration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, attResp }),
+    });
+    const verificationJSON = await verificationResp.json();
+
+    log("Registration verified: " + verificationJSON.verified);
   } catch (err) {
-    log("Error: " + err);
+    console.error("⚠️ Registration error:", err);
+    log("Registration error: " + err.message);
   }
 });
 
 login.addEventListener("click", async () => {
-  const text = validateInput();
-  if (!text) return;
+  const username = validateInput();
+  if (!username) return alert("Enter username");
 
   try {
-    const publicKey = {
-      challenge: new Uint8Array(32),
-      timeout: 60000,
-      userVerification: "preferred",
-    };
+    const resp = await fetch("/generate-authentication-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    const options = await resp.json();
 
-    const assertion = await navigator.credentials.get({ publicKey });
-    alert("Login success");
-    log(JSON.stringify(assertion, null, 2));
+    const authResp = await startAuthentication(options);
+
+    const verificationResp = await fetch("/verify-authentication", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, authResp }),
+    });
+    const verificationJSON = await verificationResp.json();
+
+    log("Authentication verified: " + verificationJSON.verified);
   } catch (err) {
-    log("Login error: " + err);
+    console.error("⚠️ Authentication error:", err);
+    log("Authentication error: " + err.message);
   }
 });
-
-// реєстрація service worker
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker
-    .register("/sw.js")
-    .then(() => console.log("SW success"))
-    .catch((err) => console.error("SW failed:", err));
-}
-

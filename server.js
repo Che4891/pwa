@@ -1,211 +1,130 @@
-// server.js
-const express = require('express');
-const session = require('express-session');
-const path = require('path');
-const crypto = require('crypto');
-
-const {
+import express from 'express';
+import bodyParser from 'body-parser';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
-} = require('@simplewebauthn/server');
+} from '@simplewebauthn/server';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+const PORT = 3000;
 
-// Просте cookie-session (для локального тесту secure:false)
-app.use(session({
-  secret: 'replace-with-a-strong-secret',
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: false }
-}));
+// Дозволяємо запити лише з нашого фронтенду (localhost)
+app.use(cors({ origin: `http://localhost:${PORT}` }));
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname)));
 
-// Serve static files (index.html + js)
-app.use(express.static(path.join(__dirname, '/')));
+const users = new Map();          // тимчасове сховище в пам’яті
+const RP_NAME = 'Demo PWA';
+const RP_ID   = 'localhost';     // має збігатися з доменом, на якому працює сайт
 
-// RP (relying party) конфігурація
-const rpName = 'Foobar Corp.';
-const rpID = 'localhost';
-const rpOrigin = 'http://localhost:8080';
+/* ------------------------------------------------------------------ */
+/* --------------------------- Реєстрація --------------------------- */
+/* ------------------------------------------------------------------ */
+app.post('/generate-registration-options', async (req, res) => {
+  const { username } = req.body;
+  console.log('🔹 /generate-registration-options →', req.body);
 
-// Простенька in-memory "база"
-const userDB = new Map();
-
-/* --- утиліти для base64/url конвертацій --- */
-function toBase64url(buffer) {
-  if (!buffer) return '';
-  return Buffer.from(buffer).toString('base64')
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-function base64urlToBase64(input) {
-  if (!input) return '';
-  let s = input.replace(/-/g,'+').replace(/_/g,'/');
-  while (s.length % 4) s += '=';
-  return s;
-}
-function base64ToBase64url(input) {
-  if (!input) return '';
-  return input.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-
-/* --- create user helper --- */
-function createUser(username) {
-  return {
-    id: crypto.randomBytes(16), // Buffer
-    username,
-    displayName: username.split('@')[0] || username,
-    credentials: []
-  };
-}
-
-/* --- ROUTES --- */
-
-// Begin registration
-app.get('/register/begin/:username', (req, res) => {
-  const username = req.params.username;
-  if (!username) return res.status(400).json({ error: 'Username required' });
-
-  let user = userDB.get(username);
-  if (!user) {
-    user = createUser(username);
-    userDB.set(username, user);
+  if (!users.has(username)) {
+    users.set(username, { id: crypto.randomUUID(), credentials: [] });
   }
+  const user = users.get(username);
 
-  const opts = generateRegistrationOptions({
-    rpName,
-    rpID,
+  const options = await generateRegistrationOptions({
+    rpName: RP_NAME,
+    rpID: RP_ID,
     userID: user.id,
     userName: username,
-    userDisplayName: user.displayName,
     timeout: 60000,
-    attestationType: 'direct',
-    authenticatorSelection: { userVerification: 'preferred' },
-    excludeCredentials: user.credentials.map(c => ({
-      id: c.credentialID,
-      type: 'public-key'
-    }))
+    attestationType: 'none',
+    authenticatorSelection: {
+      residentKey: 'preferred',
+      userVerification: 'discouraged',   // ← зміна
+    },
   });
 
-  // збережемо challenge
-  req.session.challenge = opts.challenge;
-  console.log("REG:", req);
-
-  const publicKey = { ...opts };
-
-  console.log('➡️ /register/begin response:', publicKey);
-  res.json({ publicKey });
+  console.log('🔹 generated registration options:', options);
+  user.currentChallenge = options.challenge;
+  res.json(options);
 });
 
-// Finish registration
-app.post('/register/finish/:username', async (req, res) => {
-  const username = req.params.username;
-  const body = req.body;
-
-  console.log('➡️ /register/finish body:', body);
-
-  const user = userDB.get(username);
-  if (!user) return res.status(400).json({ error: 'User not found' });
+/* ---------- verify-registration ---------- */
+app.post('/verify-registration', async (req, res) => {
+  const { username, attResp } = req.body;
+  const user = users.get(username);
+  if (!user) return res.status(400).send('User not found');
 
   try {
     const verification = await verifyRegistrationResponse({
-      response: body,
-      expectedChallenge: req.session.challenge,
-      expectedOrigin: rpOrigin,
-      expectedRPID: rpID,
+      response: attResp,
+      expectedChallenge: user.currentChallenge,
+      expectedOrigin: `http://localhost:${PORT}`,
+      expectedRPID: RP_ID,
+      expectedUserVerification: 'discouraged', // ← (опціонально)
     });
 
-    const { verified, registrationInfo } = verification;
-    if (!verified) return res.status(400).json({ error: 'Registration not verified' });
-
-    const { credentialPublicKey, credentialID, counter } = registrationInfo;
-
-    const credentialID_b64url = toBase64url(credentialID);
-    const credentialPublicKey_b64url = toBase64url(credentialPublicKey);
-
-    user.credentials.push({
-      credentialID: credentialID_b64url,
-      credentialPublicKey: credentialPublicKey_b64url,
-      counter,
-    });
-
-    console.log(`✅ User ${username} registered credential:`, credentialID_b64url);
-    return res.json({ status: 'ok' });
+    if (verification.verified) {
+      user.credentials.push(verification.registrationInfo);
+    }
+    res.json({ verified: verification.verified });
   } catch (e) {
-    console.error('❌ Registration error:', e);
-    return res.status(400).json({ error: e.toString() });
+    console.error('⚠️ verify-registration error:', e);
+    res.status(400).json({ error: e.message });
   }
 });
 
-// Begin login
-app.get('/login/begin/:username', (req, res) => {
-  const username = req.params.username;
-  const user = userDB.get(username);
-  if (!user) return res.status(400).json({ error: 'User not found' });
+/* ------------------------------------------------------------------ */
+/* ------------------------ Аутентифікація ------------------------- */
+/* ------------------------------------------------------------------ */
+app.post('/generate-authentication-options', async (req, res) => {
+  const { username } = req.body;
+  const user = users.get(username);
 
-  const opts = generateAuthenticationOptions({
+  if (!user || user.credentials.length === 0) {
+    return res.status(400).send('User not registered');
+  }
+
+  const options = await generateAuthenticationOptions({
     timeout: 60000,
-    rpID,
+    allowCredentials: user.credentials.map(cred => ({
+      id: cred.credentialID,
+      type: 'public-key',
+    })),
     userVerification: 'preferred',
-    allowCredentials: user.credentials.map(c => ({
-      id: c.credentialID,
-      type: 'public-key'
-    }))
   });
 
-  req.session.challenge = opts.challenge;
-
-  const publicKey = { ...opts };
-
-  console.log('➡️ /login/begin response:', publicKey);
-  res.json({ publicKey });
+  user.currentChallenge = options.challenge;
+  res.json(options);
 });
 
-// Finish login
-app.post('/login/finish/:username', async (req, res) => {
-  const username = req.params.username;
-  const body = req.body;
-
-  console.log('➡️ /login/finish body:', body);
-
-  const user = userDB.get(username);
-  if (!user) return res.status(400).json({ error: 'User not found' });
+app.post('/verify-authentication', async (req, res) => {
+  const { username, authResp } = req.body;
+  const user = users.get(username);
+  if (!user) return res.status(400).send('User not found');
 
   try {
-    const rawId_b64url = body.rawId;
-    const authenticator = user.credentials.find(
-      c => c.credentialID === rawId_b64url || c.credentialID === body.id
-    );
-
-    if (!authenticator) return res.status(400).json({ error: 'Authenticator not registered' });
-
     const verification = await verifyAuthenticationResponse({
-      response: body,
-      expectedChallenge: req.session.challenge,
-      expectedOrigin: rpOrigin,
-      expectedRPID: rpID,
-      authenticator: {
-        credentialID: authenticator.credentialID,
-        credentialPublicKey: authenticator.credentialPublicKey,
-        counter: authenticator.counter,
-      },
+      response: authResp,
+      expectedChallenge: user.currentChallenge,
+      expectedOrigin: `http://localhost:${PORT}`,
+      expectedRPID: RP_ID,
+      authenticator: user.credentials[0], // у демо‑версії беремо перший credential
     });
 
-    const { verified, authenticationInfo } = verification;
-    if (!verified) return res.status(400).json({ error: 'Authentication failed' });
-
-    authenticator.counter = authenticationInfo.newCounter;
-
-    console.log(`✅ User ${username} authenticated successfully`);
-    return res.json({ status: 'ok' });
+    res.json({ verified: verification.verified });
   } catch (e) {
-    console.error('❌ Login error:', e);
-    return res.status(400).json({ error: e.toString() });
+    console.error('⚠️ verify-authentication error:', e);
+    res.status(400).json({ error: e.message });
   }
 });
 
-const port = 8080;
-app.listen(port, () => {
-  console.log(`🚀 Server started at http://localhost:${port}`);
-});
+/* ------------------------------------------------------------------ */
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));

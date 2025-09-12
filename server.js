@@ -47,7 +47,7 @@ app.post('/generate-registration-options', async (req, res) => {
     attestationType: 'none',
     authenticatorSelection: {
       residentKey: 'preferred',
-      userVerification: 'discouraged',   // ← зміна
+      userVerification: 'required', 
     },
   });
 
@@ -68,7 +68,7 @@ app.post('/verify-registration', async (req, res) => {
       expectedChallenge: user.currentChallenge,
       expectedOrigin: `http://localhost:${PORT}`,
       expectedRPID: RP_ID,
-      expectedUserVerification: 'discouraged', // ← (опціонально)
+      expectedUserVerification: 'required', 
     });
 
     if (verification.verified) {

@@ -29,7 +29,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(cors({ origin: `http://localhost:5500` })); // якщо фронт на 5500, зміни при потребі
+app.use(cors({ origin: `http://localhost:5500` })); // зміни якщо фронт на іншому порту
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
@@ -61,7 +61,7 @@ app.post('/generate-registration-options', async (req, res) => {
       attestationType: 'none',
       authenticatorSelection: {
         residentKey: 'preferred',
-        userVerification: 'required',
+        userVerification: 'discouraged', // не вимагаємо FaceID/TouchID
       },
     });
 
@@ -90,6 +90,7 @@ app.post('/verify-registration', async (req, res) => {
       expectedChallenge: user.currentChallenge,
       expectedOrigin: `http://localhost:${PORT}`,
       expectedRPID: RP_ID,
+      requireUserVerification: false,
     });
 
     if (verification.verified) {
@@ -136,7 +137,7 @@ app.post('/generate-authentication-options', async (req, res) => {
         id: c.credentialID,
         type: 'public-key',
       })),
-      userVerification: 'preferred',
+      userVerification: 'preferred', // 👈 було required → змінив
     });
 
     await db.execute('UPDATE users SET currentChallenge=? WHERE id=?', [
@@ -162,13 +163,14 @@ app.post('/verify-authentication', async (req, res) => {
     const [creds] = await db.execute('SELECT * FROM credentials WHERE user_id=?', [user.id]);
     if (creds.length === 0) return res.status(400).send('No credentials');
 
-    const cred = creds[0]; // беремо перший credential (якщо кілька — можна зробити пошук по ID)
+    const cred = creds[0];
 
     const verification = await verifyAuthenticationResponse({
       response: authResp,
       expectedChallenge: user.currentChallenge,
       expectedOrigin: `http://localhost:${PORT}`,
       expectedRPID: RP_ID,
+      expectedUserVerification: 'preferred', // 👈 додаємо
       authenticator: {
         credentialID: cred.credentialID,
         credentialPublicKey: cred.publicKey,

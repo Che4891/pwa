@@ -1,77 +1,69 @@
-// Отримуємо функції з глобальної змінної SimpleWebAuthnBrowser
 const { startRegistration, startAuthentication } = SimpleWebAuthnBrowser;
 
-const output = document.getElementById("output");
-const register = document.getElementById("register");
-const login = document.getElementById("login");
-const usernameInput = document.getElementById("username");
-const inputContainer = document.getElementById("inputContainer");
+const usernameInput = document.getElementById('username');
+const registerBtn = document.getElementById('register');
+const loginBtn = document.getElementById('login');
+const output = document.getElementById('output');
 
-const log = (msg) => (output.textContent += msg + "\n");
-
-function validateInput() {
-  const value = usernameInput.value.trim();
-  const isValid = value !== "";
-  inputContainer.classList.toggle("alert", !isValid);
-  return isValid ? value : null;
+function log(msg) {
+  output.textContent += msg + '\n';
 }
 
-usernameInput.addEventListener("blur", validateInput);
+// ---------- Реєстрація ----------
+registerBtn.addEventListener('click', async () => {
+  output.textContent = ''
+  const username = usernameInput.value.trim();
+  if (!username) return alert('Enter username');
 
-register.addEventListener("click", async () => {
-  const username = validateInput();
-  if (!username) return alert("Enter username");
+  // 1. Отримуємо опції
+  const resp = await fetch('/generate-registration-options', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  const options = await resp.json();
 
-  try {
-    const resp = await fetch("/generate-registration-options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username }),
-    });
-    const options = await resp.json();
+  // 2. Створюємо credential
+  const attResp = await startRegistration({ optionsJSON: options });
 
-    const attResp = await startRegistration(options);
+  // 3. Відправляємо credential на сервер
+  const verificationResp = await fetch('/verify-registration', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, ...attResp }),
+  });
+  const verificationJSON = await verificationResp.json();
 
-    const verificationResp = await fetch("/verify-registration", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, attResp }),
-    });
-    const verificationJSON = await verificationResp.json();
-
-    log("Registration verified: " + verificationJSON.verified);
-  } catch (err) {
-    console.error("⚠️ Registration error:", err);
-    log("Registration error: " + err.message);
-  }
+  log('Registration verified: ' + verificationJSON.verified);
 });
 
-login.addEventListener("click", async () => {
-  const username = validateInput();
-  if (!username) return alert("Enter username");
+// ---------- Логін ----------
+loginBtn.addEventListener('click', async () => {
+  output.textContent = ''
 
-  try {
-    const resp = await fetch("/generate-authentication-options", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username }),
-    });
-    const options = await resp.json();
+  const username = usernameInput.value.trim();
+  if (!username) return alert('Enter username');
 
-    const authResp = await startAuthentication(options);
+  // 1. Отримуємо опції
+  const resp = await fetch('/generate-authentication-options', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username }),
+  });
+  const options = await resp.json();
 
-    const verificationResp = await fetch("/verify-authentication", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, authResp }),
-    });
-    const verificationJSON = await verificationResp.json();
+  // 2. Виконуємо логін
+  const authResp = await startAuthentication({ optionsJSON: options });
 
-    log("Authentication verified: " + verificationJSON.verified);
-  } catch (err) {
-    console.error("⚠️ Authentication error:", err);
-    log("Authentication error: " + err.message);
-  }
+  // 3. Відправляємо credential на сервер
+  const verificationResp = await fetch('/verify-authentication', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, ...authResp }),
+  });
+  const verificationJSON = await verificationResp.json();
+
+  log('Authentication verified: ' + verificationJSON.verified);
 });
 
 if ("serviceWorker" in navigator) {

@@ -10,6 +10,7 @@ import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from '@simplewebauthn/server';
+import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import mysql from 'mysql2/promise';
 
 /* ---------------------- DB connection ---------------------- */
@@ -29,7 +30,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(cors({ origin: `http://localhost:5500` })); // зміни якщо фронт на іншому порту
+app.use(cors({ origin: `http://localhost:5500` })); // змінюй під фронт
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname)));
 
@@ -41,6 +42,7 @@ const RP_ID = 'localhost';
 /* ========================================================== */
 app.post('/generate-registration-options', async (req, res) => {
   const { username } = req.body;
+
   try {
     let [rows] = await db.execute('SELECT * FROM users WHERE username=?', [username]);
 
@@ -55,13 +57,13 @@ app.post('/generate-registration-options', async (req, res) => {
     const options = await generateRegistrationOptions({
       rpName: RP_NAME,
       rpID: RP_ID,
-      userID: user.id,
+      userID: Buffer.from(user.id, 'utf8'),
       userName: username,
       timeout: 60000,
       attestationType: 'none',
       authenticatorSelection: {
-        residentKey: 'preferred',
-        userVerification: 'discouraged', // не вимагаємо FaceID/TouchID
+        residentKey: 'discouraged',
+        userVerification: 'preferred',
       },
     });
 
@@ -78,7 +80,8 @@ app.post('/generate-registration-options', async (req, res) => {
 });
 
 app.post('/verify-registration', async (req, res) => {
-  const { username, attResp } = req.body;
+  const { username, ...attResp } = req.body;
+
   try {
     const [rows] = await db.execute('SELECT * FROM users WHERE username=?', [username]);
     if (rows.length === 0) return res.status(400).send('User not found');
@@ -96,15 +99,17 @@ app.post('/verify-registration', async (req, res) => {
     if (verification.verified) {
       const { registrationInfo } = verification;
 
+      console.log('✅ registrationInfo:', registrationInfo);
+
       await db.execute(
         `INSERT INTO credentials 
          (user_id, credentialID, publicKey, counter, transports) 
          VALUES (?, ?, ?, ?, ?)`,
         [
           user.id,
-          Buffer.from(registrationInfo.credentialID),
-          registrationInfo.credentialPublicKey,
-          registrationInfo.counter,
+          registrationInfo.credentialID || null,
+          registrationInfo.credentialPublicKey || null,
+          registrationInfo.counter ?? 0,
           JSON.stringify(registrationInfo.transports || []),
         ]
       );
@@ -122,22 +127,22 @@ app.post('/verify-registration', async (req, res) => {
 /* ========================================================== */
 app.post('/generate-authentication-options', async (req, res) => {
   const { username } = req.body;
+
   try {
     const [rows] = await db.execute('SELECT * FROM users WHERE username=?', [username]);
     if (rows.length === 0) return res.status(400).send('User not found');
 
     const user = rows[0];
-
     const [creds] = await db.execute('SELECT * FROM credentials WHERE user_id=?', [user.id]);
     if (creds.length === 0) return res.status(400).send('No credentials');
 
     const options = await generateAuthenticationOptions({
       timeout: 60000,
       allowCredentials: creds.map(c => ({
-        id: c.credentialID,
+        id: isoBase64URL.fromBuffer(c.credentialID), // ✅ конвертуємо Buffer → Base64URL
         type: 'public-key',
       })),
-      userVerification: 'preferred', // 👈 було required → змінив
+      userVerification: 'preferred',
     });
 
     await db.execute('UPDATE users SET currentChallenge=? WHERE id=?', [
@@ -153,13 +158,13 @@ app.post('/generate-authentication-options', async (req, res) => {
 });
 
 app.post('/verify-authentication', async (req, res) => {
-  const { username, authResp } = req.body;
+  const { username, ...authResp } = req.body;
+
   try {
     const [rows] = await db.execute('SELECT * FROM users WHERE username=?', [username]);
     if (rows.length === 0) return res.status(400).send('User not found');
 
     const user = rows[0];
-
     const [creds] = await db.execute('SELECT * FROM credentials WHERE user_id=?', [user.id]);
     if (creds.length === 0) return res.status(400).send('No credentials');
 
@@ -170,12 +175,12 @@ app.post('/verify-authentication', async (req, res) => {
       expectedChallenge: user.currentChallenge,
       expectedOrigin: `http://localhost:${PORT}`,
       expectedRPID: RP_ID,
-      expectedUserVerification: 'preferred', // 👈 додаємо
       authenticator: {
-        credentialID: cred.credentialID,
-        credentialPublicKey: cred.publicKey,
+        credentialID: cred.credentialID,         // ✅ Buffer напряму
+        credentialPublicKey: cred.publicKey,     // ✅ Buffer напряму
         counter: cred.counter,
       },
+      requireUserVerification: false,
     });
 
     if (verification.verified) {
